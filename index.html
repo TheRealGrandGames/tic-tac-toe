@@ -125,7 +125,15 @@
 
     // Firebase configuration and initialization
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+    const firebaseConfig = {
+      apiKey: "AIzaSyBW9VPci4QL6OqXDMXO1GC-iLf0aTQ4hDw",
+      authDomain: "tic-tac-toe-7954e.firebaseapp.com",
+      projectId: "tic-tac-toe-7954e",
+      storageBucket: "tic-tac-toe-7954e.firebasestorage.app",
+      messagingSenderId: "274091394640",
+      appId: "1:274091394640:web:68656cf882c7fd2e007355",
+      measurementId: "G-7ZVBMKP8Q6"
+    };
     
     // Show a message to the user
     function showMessage(message) {
