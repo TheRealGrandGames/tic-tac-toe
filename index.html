@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Tic-Tac-Toe</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+            color: #1a202c;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            max-width: 90%;
+            width: 500px;
+        }
+        .message-box {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 1rem;
+            background-color: #4a5568;
+            color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            display: none;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+        .visible {
+            display: block;
+            opacity: 1;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid #fff;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+<div id="loading" class="absolute inset-0 bg-gray-100 flex items-center justify-center flex-col z-50">
+    <div class="spinner"></div>
+    <p class="mt-4 text-gray-700">Connecting to Firebase...</p>
+</div>
+
+<div class="container text-center">
+    <h1 class="text-3xl font-bold mb-4 text-gray-800">Real-time Tic-Tac-Toe</h1>
+
+    <div id="game-setup-container" class="flex flex-col items-center space-y-4">
+        <button id="create-game-btn" class="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold text-lg hover:bg-blue-700 transition-colors">Create New Game</button>
+        <div class="flex items-center space-x-2 w-full">
+            <input id="game-id-input" type="text" placeholder="Enter Game ID" class="flex-grow p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button id="join-game-btn" class="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold text-lg hover:bg-green-700 transition-colors">Join Game</button>
+        </div>
+        <p class="text-sm text-gray-500">Share your Game ID with a friend to play!</p>
+    </div>
+
+    <div id="game-container" class="hidden flex flex-col items-center">
+        <h2 id="status-message" class="text-xl font-semibold mb-4 text-gray-700"></h2>
+        <p class="text-sm text-gray-500 mb-2">Game ID: <span id="display-game-id" class="font-mono text-gray-700 font-bold"></span></p>
+
+        <div id="board" class="w-full max-w-sm aspect-square bg-gray-200 rounded-lg grid grid-cols-3 gap-2 p-2">
+            <!-- SVG board will be generated here -->
+        </div>
+
+        <button id="restart-game-btn" class="mt-6 bg-red-500 text-white px-6 py-3 rounded-lg font-semibold text-lg hover:bg-red-600 transition-colors hidden">Play Again</button>
+    </div>
+
+    <p class="text-xs text-gray-400 mt-4">Your User ID: <span id="display-user-id" class="font-mono"></span></p>
+
+</div>
+
+<div id="message-box" class="message-box"></div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot, runTransaction, getDocs, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    setLogLevel('debug');
+
+    const boardElement = document.getElementById('board');
+    const statusMessageElement = document.getElementById('status-message');
+    const createGameBtn = document.getElementById('create-game-btn');
+    const joinGameBtn = document.getElementById('join-game-btn');
+    const gameIdInput = document.getElementById('game-id-input');
+    const gameSetupContainer = document.getElementById('game-setup-container');
+    const gameContainer = document.getElementById('game-container');
+    const displayGameId = document.getElementById('display-game-id');
+    const displayUserId = document.getElementById('display-user-id');
+    const restartGameBtn = document.getElementById('restart-game-btn');
+    const loadingScreen = document.getElementById('loading');
+    const messageBox = document.getElementById('message-box');
+
+    let db;
+    let auth;
+    let userId;
+    let gameId = null;
+    let currentPlayer = null;
+    let gameDataUnsubscribe = null;
+
+    // Firebase configuration and initialization
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+    
+    // Show a message to the user
+    function showMessage(message) {
+        messageBox.textContent = message;
+        messageBox.classList.add('visible');
+        setTimeout(() => {
+            messageBox.classList.remove('visible');
+        }, 3000);
+    }
+
+    // Function to render the SVG board
+    function renderBoard(boardState) {
+        boardElement.innerHTML = '';
+        boardState.forEach((cell, index) => {
+            const cellDiv = document.createElement('div');
+            cellDiv.className = `w-full h-full rounded-lg bg-white shadow-md flex items-center justify-center cursor-pointer transition-transform transform hover:scale-105 ${cell ? 'cursor-not-allowed' : ''}`;
+            cellDiv.dataset.index = index;
+
+            if (cell) {
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.setAttribute('viewBox', '0 0 100 100');
+                svg.setAttribute('class', `w-4/5 h-4/5 ${cell === 'X' ? 'text-blue-600' : 'text-red-600'}`);
+
+                if (cell === 'X') {
+                    svg.innerHTML = `
+                        <path d="M20 20 L80 80" stroke="currentColor" stroke-width="15" stroke-linecap="round"/>
+                        <path d="M80 20 L20 80" stroke="currentColor" stroke-width="15" stroke-linecap="round"/>
+                    `;
+                } else {
+                    svg.innerHTML = `
+                        <circle cx="50" cy="50" r="40" stroke="currentColor" stroke-width="15" fill="none"/>
+                    `;
+                }
+                cellDiv.appendChild(svg);
+            }
+            boardElement.appendChild(cellDiv);
+        });
+    }
+
+    // Check for a winner
+    function checkWinner(board) {
+        const winningConditions = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
+            [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
+            [0, 4, 8], [2, 4, 6]            // Diagonals
+        ];
+        for (let condition of winningConditions) {
+            const [a, b, c] = condition;
+            if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+                return board[a];
+            }
+        }
+        return null;
+    }
+
+    // Check for a draw
+    function checkDraw(board) {
+        return board.every(cell => cell !== null);
+    }
+
+    // Function to handle a move
+    async function handleMove(index) {
+        if (!gameId) return;
+
+        try {
+            const gameRef = doc(db, 'artifacts', appId, 'public', 'data', 'games', gameId);
+            await runTransaction(db, async (transaction) => {
+                const gameDoc = await transaction.get(gameRef);
+                if (!gameDoc.exists()) {
+                    throw "Game does not exist!";
+                }
+
+                const data = gameDoc.data();
+                if (data.status !== 'playing' || data.currentPlayerId !== userId || data.board[index] !== null) {
+                    return;
+                }
+
+                // Make the move
+                const newBoard = [...data.board];
+                newBoard[index] = data.turn;
+
+                // Check for a winner or draw
+                const winner = checkWinner(newBoard);
+                const isDraw = checkDraw(newBoard);
+                let newStatus = 'playing';
+
+                if (winner) {
+                    newStatus = 'win';
+                    showMessage(`${data.turn} wins!`);
+                } else if (isDraw) {
+                    newStatus = 'draw';
+                    showMessage('It\'s a draw!');
+                }
+
+                // Update the document
+                transaction.update(gameRef, {
+                    board: newBoard,
+                    turn: data.turn === 'X' ? 'O' : 'X',
+                    currentPlayerId: data.players.find(p => p.id !== userId).id,
+                    status: newStatus,
+                    lastMoveAt: Date.now()
+                });
+            });
+        } catch (error) {
+            console.error("Transaction failed: ", error);
+        }
+    }
+
+    // Start listening for game state changes
+    function listenToGame(id) {
+        if (gameDataUnsubscribe) {
+            gameDataUnsubscribe();
+        }
+
+        const gameRef = doc(db, 'artifacts', appId, 'public', 'data', 'games', id);
+        gameDataUnsubscribe = onSnapshot(gameRef, (doc) => {
+            if (doc.exists()) {
+                const data = doc.data();
+                displayGameId.textContent = id;
+                renderBoard(data.board);
+
+                if (data.status === 'playing') {
+                    if (data.players.length < 2) {
+                        statusMessageElement.textContent = "Waiting for another player...";
+                    } else if (data.currentPlayerId === userId) {
+                        statusMessageElement.textContent = "It's your turn!";
+                    } else {
+                        statusMessageElement.textContent = `It's ${data.turn}'s turn`;
+                    }
+                    restartGameBtn.classList.add('hidden');
+                } else {
+                    if (data.status === 'win') {
+                        statusMessageElement.textContent = `${data.turn === 'X' ? 'O' : 'X'} wins!`;
+                    } else if (data.status === 'draw') {
+                        statusMessageElement.textContent = 'It\'s a draw!';
+                    }
+                    restartGameBtn.classList.remove('hidden');
+                }
+            } else {
+                showMessage("Game not found. Please create a new one.");
+                setupGame();
+            }
+        });
+    }
+    
+    // Initialize the game
+    async function initializeGame(id) {
+        gameId = id;
+        gameSetupContainer.classList.add('hidden');
+        gameContainer.classList.remove('hidden');
+        listenToGame(gameId);
+    }
+
+    // Set up the UI for a new game or joining
+    function setupGame() {
+        gameId = null;
+        gameSetupContainer.classList.remove('hidden');
+        gameContainer.classList.add('hidden');
+        statusMessageElement.textContent = "";
+        displayGameId.textContent = "";
+        restartGameBtn.classList.add('hidden');
+    }
+    
+    // Create a new game in Firestore
+    async function createGame() {
+        if (!userId) {
+            showMessage("Authentication not ready. Please wait.");
+            return;
+        }
+
+        const newGameId = crypto.randomUUID().substring(0, 8);
+        const gameRef = doc(db, 'artifacts', appId, 'public', 'data', 'games', newGameId);
+        const initialGame = {
+            board: Array(9).fill(null),
+            turn: 'X',
+            status: 'playing',
+            players: [{ id: userId, symbol: 'X' }],
+            currentPlayerId: userId,
+            lastMoveAt: Date.now(),
+        };
+
+        try {
+            await setDoc(gameRef, initialGame);
+            initializeGame(newGameId);
+            showMessage(`Game created! Share this ID: ${newGameId}`);
+        } catch (error) {
+            console.error("Error creating game:", error);
+            showMessage("Failed to create game.");
+        }
+    }
+
+    // Join an existing game in Firestore
+    async function joinGame() {
+        if (!userId) {
+            showMessage("Authentication not ready. Please wait.");
+            return;
+        }
+
+        const id = gameIdInput.value.trim();
+        if (!id) {
+            showMessage("Please enter a Game ID.");
+            return;
+        }
+
+        const gameRef = doc(db, 'artifacts', appId, 'public', 'data', 'games', id);
+
+        try {
+            await runTransaction(db, async (transaction) => {
+                const gameDoc = await transaction.get(gameRef);
+                if (!gameDoc.exists()) {
+                    showMessage("Game ID not found.");
+                    throw "Game not found";
+                }
+
+                const data = gameDoc.data();
+                if (data.players.length >= 2) {
+                    showMessage("Game is full.");
+                    throw "Game is full";
+                }
+                if (data.players.some(p => p.id === userId)) {
+                    showMessage("You are already in this game.");
+                    return;
+                }
+
+                // Add the new player
+                const updatedPlayers = [...data.players, { id: userId, symbol: 'O' }];
+                transaction.update(gameRef, {
+                    players: updatedPlayers
+                });
+                
+                initializeGame(id);
+                showMessage("Joined game successfully!");
+            });
+        } catch (error) {
+            console.error("Error joining game:", error);
+            // The showMessage is already called in the transaction if an error occurs
+        }
+    }
+    
+    // Restart the game
+    async function restartGame() {
+        if (!gameId) return;
+
+        const gameRef = doc(db, 'artifacts', appId, 'public', 'data', 'games', gameId);
+        try {
+            await setDoc(gameRef, {
+                board: Array(9).fill(null),
+                turn: 'X',
+                status: 'playing',
+                players: [], // Reset players to allow others to join
+                currentPlayerId: null,
+                lastMoveAt: Date.now()
+            });
+            showMessage("Game restarted! Waiting for players...");
+            setupGame();
+        } catch (error) {
+            console.error("Error restarting game:", error);
+            showMessage("Failed to restart game.");
+        }
+    }
+    
+    // Event listeners
+    createGameBtn.addEventListener('click', createGame);
+    joinGameBtn.addEventListener('click', joinGame);
+    restartGameBtn.addEventListener('click', restartGame);
+    boardElement.addEventListener('click', (e) => {
+        const cell = e.target.closest('div[data-index]');
+        if (cell) {
+            const index = parseInt(cell.dataset.index, 10);
+            handleMove(index);
+        }
+    });
+
+    // Firestore and Auth initialization
+    document.addEventListener('DOMContentLoaded', async () => {
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            // Sign in anonymously with custom token
+            if (typeof __initial_auth_token !== 'undefined') {
+                await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+                await signInAnonymously(auth);
+            }
+            
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    displayUserId.textContent = userId;
+                    loadingScreen.classList.add('hidden');
+                    console.log("Authentication successful. User ID:", userId);
+                } else {
+                    console.log("No user is signed in.");
+                }
+            });
+        } catch (error) {
+            console.error("Firebase initialization error:", error);
+            loadingScreen.querySelector('p').textContent = "Failed to connect to Firebase. Check console for details.";
+        }
+    });
+</script>
+
+</body>
+</html>
